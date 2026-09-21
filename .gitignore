@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.log
+
+# Secrets. `.env.example` is committed; `.env` never is.
+.env
+
+# Local run records written by the CLI and the server.
+.runtime-data/
+
+# Personal demo/video script, not part of the submission.
+DEMO.md
