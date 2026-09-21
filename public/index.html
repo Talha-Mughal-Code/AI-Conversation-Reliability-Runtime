@@ -1,0 +1,414 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Conversation Runtime</title>
+    <style>
+      /*
+       * One file, no build step, no framework. The page is a thin client over
+       * the same SSE endpoint curl uses; it owns no runtime logic of its own.
+       * Sized for legibility in a screen recording.
+       */
+      :root {
+        --bg: #0f1115;
+        --panel: #171a21;
+        --panel-2: #1e222b;
+        --line: #2a2f3a;
+        --text: #e6e9ef;
+        --muted: #8b93a3;
+        --accent: #5b9dff;
+        --ok: #3ecf8e;
+        --warn: #f0b44a;
+        --bad: #f4726f;
+        --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+        padding: 24px 16px 48px;
+      }
+      .wrap { max-width: 1040px; margin: 0 auto; }
+      h1 { font-size: 20px; margin: 0 0 2px; }
+      .sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 16px;
+        margin-bottom: 16px;
+      }
+      .label {
+        font-size: 11px;
+        letter-spacing: .08em;
+        text-transform: uppercase;
+        color: var(--muted);
+        margin-bottom: 10px;
+      }
+      .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+      button {
+        font: inherit;
+        color: var(--text);
+        background: var(--panel-2);
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        padding: 7px 12px;
+        cursor: pointer;
+      }
+      button:hover:not(:disabled) { border-color: var(--accent); }
+      button:disabled { opacity: .4; cursor: not-allowed; }
+      button.primary { background: var(--accent); border-color: var(--accent); color: #07101f; font-weight: 600; }
+      button.danger { border-color: var(--bad); color: var(--bad); }
+      .row { display: flex; gap: 8px; margin-top: 12px; }
+      input[type="text"] {
+        flex: 1;
+        font: inherit;
+        color: var(--text);
+        background: var(--panel-2);
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        padding: 9px 12px;
+      }
+      input[type="text"]:focus { outline: none; border-color: var(--accent); }
+      .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+      @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
+
+      .pill {
+        display: inline-block;
+        font: 600 11px/1 var(--mono);
+        letter-spacing: .06em;
+        text-transform: uppercase;
+        padding: 5px 9px;
+        border-radius: 999px;
+        border: 1px solid currentColor;
+      }
+      .s-idle { color: var(--muted); }
+      .s-streaming { color: var(--accent); }
+      .s-completed { color: var(--ok); }
+      .s-rejected { color: var(--warn); }
+      .s-cancelled, .s-timed_out, .s-failed { color: var(--bad); }
+
+      #output {
+        font-family: var(--mono);
+        font-size: 14px;
+        white-space: pre-wrap;
+        word-break: break-word;
+        min-height: 92px;
+        background: var(--panel-2);
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        padding: 12px;
+        margin-top: 12px;
+      }
+      #output:empty::before { content: "Nothing streamed yet."; color: var(--muted); }
+      .banner {
+        margin-top: 10px;
+        padding: 9px 12px;
+        border-radius: 7px;
+        font-size: 13px;
+        border: 1px solid;
+        display: none;
+      }
+      .banner.show { display: block; }
+      .banner.partial { border-color: var(--bad); color: var(--bad); background: rgba(244,114,111,.08); }
+      .banner.ok { border-color: var(--ok); color: var(--ok); background: rgba(62,207,142,.08); }
+
+      table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 12.5px; }
+      th {
+        text-align: left;
+        color: var(--muted);
+        font-weight: 500;
+        padding: 0 8px 7px 0;
+        border-bottom: 1px solid var(--line);
+      }
+      td { padding: 6px 8px 6px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+      .muted { color: var(--muted); }
+      .role-user { color: var(--accent); }
+      .role-assistant { color: var(--ok); }
+
+      #trace { max-height: 320px; overflow-y: auto; font-family: var(--mono); font-size: 12px; }
+      .ev { display: flex; gap: 10px; padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,.04); }
+      .ev .seq { color: var(--muted); min-width: 24px; text-align: right; }
+      .ev .kind { min-width: 74px; }
+      .ev.lifecycle .kind { color: var(--accent); }
+      .ev.diagnostic .kind, .ev.diagnostic .type { color: var(--muted); }
+      .ev .data { color: var(--muted); }
+      .hint { color: var(--muted); font-size: 12.5px; margin-top: 10px; }
+      code { font-family: var(--mono); background: var(--panel-2); padding: 1px 5px; border-radius: 4px; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>Reliable AI Conversation Runtime</h1>
+      <div class="sub">
+        One turn, one terminal state. This page is a thin client over the same
+        <code>POST /turns</code> SSE endpoint the CLI and <code>curl</code> use.
+      </div>
+
+      <div class="panel">
+        <div class="label">Deterministic scenarios</div>
+        <div class="chips" id="scenarios"></div>
+        <div class="row">
+          <input type="text" id="input" placeholder="…or type your own message" autocomplete="off" />
+          <button class="primary" id="send">Send</button>
+          <button class="danger" id="cancel" disabled>Cancel</button>
+        </div>
+        <div class="hint">
+          Cancel aborts the request. The server sees the socket close and cancels the turn —
+          the same path <code>Ctrl-C</code> takes in the CLI.
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="label">
+          Response &nbsp;·&nbsp; <span class="pill s-idle" id="state">idle</span>
+          <span class="muted" id="meta"></span>
+        </div>
+        <div id="output"></div>
+        <div class="banner" id="banner"></div>
+      </div>
+
+      <div class="grid">
+        <div class="panel">
+          <div class="label">Persisted transcript</div>
+          <table>
+            <thead><tr><th>role</th><th>text</th></tr></thead>
+            <tbody id="messages"><tr><td colspan="2" class="muted">empty</td></tr></tbody>
+          </table>
+          <div class="hint">Only a completed turn writes an assistant message.</div>
+        </div>
+        <div class="panel">
+          <div class="label">Runs</div>
+          <table>
+            <thead><tr><th>state</th><th>chunks</th><th>provider</th><th>partial</th></tr></thead>
+            <tbody id="runs"><tr><td colspan="4" class="muted">none yet</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="label">Operational trace</div>
+        <div id="trace" class="muted">Run a turn to see its ordered trace.</div>
+      </div>
+    </div>
+
+    <script>
+      const SCENARIOS = [
+        'success',
+        'rejection',
+        'cancellation',
+        'timeout',
+        'provider_failure',
+        'terminal_race',
+      ];
+      const CONVERSATION = 'conv_web';
+
+      const $ = (id) => document.getElementById(id);
+      const els = {
+        scenarios: $('scenarios'), input: $('input'), send: $('send'), cancel: $('cancel'),
+        state: $('state'), meta: $('meta'), output: $('output'), banner: $('banner'),
+        messages: $('messages'), runs: $('runs'), trace: $('trace'),
+      };
+
+      let controller = null;
+
+      for (const name of SCENARIOS) {
+        const button = document.createElement('button');
+        button.textContent = name;
+        button.onclick = () => run({ scenario: name });
+        els.scenarios.append(button);
+      }
+      els.send.onclick = () => run({ input: els.input.value });
+      els.input.onkeydown = (e) => { if (e.key === 'Enter') els.send.click(); };
+      els.cancel.onclick = () => controller?.abort();
+
+      function setState(state) {
+        els.state.className = `pill s-${state}`;
+        els.state.textContent = state;
+      }
+
+      function setBanner(kind, text) {
+        els.banner.className = `banner show ${kind}`;
+        els.banner.textContent = text;
+      }
+
+      function busy(isBusy) {
+        els.send.disabled = isBusy;
+        els.cancel.disabled = !isBusy;
+        for (const b of els.scenarios.children) b.disabled = isBusy;
+      }
+
+      async function run({ scenario, input }) {
+        if (!scenario && !input?.trim() && input !== '') return;
+
+        // Remembered so that after a cancel -- where the terminal SSE frame never
+        // arrives -- we can wait for THIS turn's record rather than reading back
+        // the previous one and reporting its outcome as ours.
+        const runsBefore = await countRuns();
+
+        controller = new AbortController();
+        busy(true);
+        setState('streaming');
+        els.output.textContent = '';
+        els.meta.textContent = '';
+        els.banner.className = 'banner';
+        els.trace.textContent = 'streaming…';
+
+        const url = scenario ? `/turns?scenario=${scenario}` : '/turns';
+        let terminal = null;
+        let trace = null;
+
+        try {
+          const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ conversationId: CONVERSATION, input: input ?? '' }),
+            signal: controller.signal,
+          });
+
+          // Minimal SSE reader. EventSource only speaks GET, and a turn is a POST.
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+
+            const frames = buffer.split('\n\n');
+            buffer = frames.pop() ?? '';
+            for (const frame of frames) {
+              const event = /event: (.+)/.exec(frame)?.[1];
+              const data = JSON.parse(/data: (.+)/.exec(frame)?.[1] ?? '{}');
+              if (event === 'chunk') els.output.textContent += data.text;
+              if (event === 'terminal') terminal = data;
+              if (event === 'trace') trace = data.events;
+            }
+          }
+        } catch (error) {
+          // An abort is the expected exit for Cancel: the terminal frame never
+          // arrives because we closed the socket. The server still settles the
+          // run, so we read the outcome back from the store below.
+          if (error.name !== 'AbortError') {
+            setState('failed');
+            setBanner('partial', `Transport error: ${error.message}`);
+          }
+        } finally {
+          busy(false);
+          controller = null;
+        }
+
+        // On a cancel the server is still settling the run when the socket closes.
+        if (!terminal) await waitForNewRun(runsBefore);
+        await refresh(terminal, trace);
+      }
+
+      async function countRuns() {
+        const { runs } = await fetch(`/conversations/${CONVERSATION}/runs`).then((r) => r.json());
+        return runs.length;
+      }
+
+      /** Polls until this turn's record lands, rather than showing a stale outcome. */
+      async function waitForNewRun(previousCount) {
+        for (let attempt = 0; attempt < 40; attempt++) {
+          if ((await countRuns()) > previousCount) return true;
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        return false;
+      }
+
+      async function refresh(terminal, trace) {
+        const [messages, runs] = await Promise.all([
+          fetch(`/conversations/${CONVERSATION}/messages`).then((r) => r.json()),
+          fetch(`/conversations/${CONVERSATION}/runs`).then((r) => r.json()),
+        ]);
+
+        // On a cancel we never received the terminal frame, so the authoritative
+        // outcome is the persisted run record.
+        const latest = runs.runs[0];
+        const outcome = terminal ?? latest;
+
+        // When nothing streamed into this page (first load, or a cancel), show the
+        // text the run actually retained so the state and the output cannot disagree.
+        if (!terminal && latest && els.output.textContent === '') {
+          els.output.textContent = latest.outputText;
+        }
+
+        if (outcome) {
+          setState(outcome.state ?? outcome.terminalState);
+          const rule = outcome.policyRuleId ?? latest?.policyRuleId ?? '';
+          els.meta.textContent = ` · ${outcome.chunkCount} chunks · ${rule}`;
+
+          if (outcome.state === 'completed' || outcome.terminalState === 'completed') {
+            setBanner('ok', 'Completed. Assistant message committed to the transcript.');
+          } else if ((outcome.chunkCount ?? 0) > 0) {
+            setBanner(
+              'partial',
+              'Partial output. Retained on the run record only — never committed as an assistant message.',
+            );
+          } else {
+            setBanner('partial', outcome.termination?.message ?? 'No output produced.');
+          }
+        } else {
+          setState('idle');
+          setBanner('partial', 'No run record found for this turn.');
+        }
+
+        els.messages.innerHTML =
+          messages.messages.length === 0
+            ? '<tr><td colspan="2" class="muted">empty</td></tr>'
+            : messages.messages
+                .map(
+                  (m) =>
+                    `<tr><td class="role-${m.role}">${m.role}</td><td>${escapeHtml(m.text)}</td></tr>`,
+                )
+                .join('');
+
+        els.runs.innerHTML =
+          runs.runs.length === 0
+            ? '<tr><td colspan="4" class="muted">none yet</td></tr>'
+            : runs.runs
+                .map(
+                  (r) =>
+                    `<tr><td class="s-${r.terminalState}">${r.terminalState}</td>` +
+                    `<td>${r.chunkCount}</td><td>${r.providerInvoked}</td>` +
+                    `<td>${r.outputIsPartial && r.chunkCount > 0 ? 'yes' : '—'}</td></tr>`,
+                )
+                .join('');
+
+        renderTrace(trace ?? latest?.trace ?? []);
+      }
+
+      function renderTrace(events) {
+        if (events.length === 0) {
+          els.trace.textContent = 'No trace available.';
+          return;
+        }
+        els.trace.innerHTML = events
+          .map((e) => {
+            const data = Object.keys(e.data ?? {}).length
+              ? escapeHtml(JSON.stringify(e.data))
+              : '';
+            return (
+              `<div class="ev ${e.kind}"><span class="seq">${e.seq}</span>` +
+              `<span class="kind">${e.kind}</span>` +
+              `<span class="type">${e.type}</span><span class="data">${data}</span></div>`
+            );
+          })
+          .join('');
+      }
+
+      function escapeHtml(value) {
+        return String(value).replace(/[&<>"]/g, (c) =>
+          ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c],
+        );
+      }
+
+      refresh(null, null);
+    </script>
+  </body>
+</html>
