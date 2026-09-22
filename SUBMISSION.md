@@ -2,9 +2,10 @@
 
 ## Candidate
 
-- **Name:** _TODO_
-- **Email:** _TODO_
-- **GitHub:** _TODO_
+- **Name:** Talha Mughal
+- **Email:** devtalhamughal@gmail.com
+- **GitHub:** [@Talha-Mughal-Code](https://github.com/Talha-Mughal-Code)
+- **Repository:** https://github.com/Talha-Mughal-Code/AI-Conversation-Reliability-Runtime
 - **Selected problem:** Problem 5 — Reliable AI Conversation Runtime
 - **Demo video:** _TODO — paste the Loom/YouTube/Drive link here and check that it opens in a logged-out browser_
 
