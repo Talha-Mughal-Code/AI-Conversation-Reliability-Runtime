@@ -7,7 +7,7 @@
 - **GitHub:** [@Talha-Mughal-Code](https://github.com/Talha-Mughal-Code)
 - **Repository:** https://github.com/Talha-Mughal-Code/AI-Conversation-Reliability-Runtime
 - **Selected problem:** Problem 5 — Reliable AI Conversation Runtime
-- **Demo video:** _TODO — paste the Loom/YouTube/Drive link here and check that it opens in a logged-out browser_
+- **Demo video:** 
 
 ---
 
@@ -402,20 +402,58 @@ I used **Claude (Claude Code)** throughout, as an implementation pair rather tha
 
 **How I reviewed it:** every change ran against `tsc --noEmit` and the full suite. More importantly, I mutation-tested the benchmark (table above) rather than trusting a green result — which is how I found that the benchmark was checking the trace instead of the domain log, and that no scenario actually exercised the latch. Several bugs surfaced this way and are documented rather than quietly fixed: `chunked()` returning `n-1` chunks, the raw token in `StoredRun.input`, listening for disconnects on the wrong Node event, and a `FakeClock` that flushed between same-instant timers and so hid genuine collisions.
 
-> _TODO — adjust the above to reflect your own division of labour before submitting. Reviewers will ask you to walk through any part of this code, so make sure this section is true of you._
-
 ---
 
 ## Credibility note
 
-> _TODO — this section is yours to write; I cannot write it for you._
->
-> Cover, in a short paragraph or a few bullets:
->
-> - **The product or system** and the problem it solved
-> - **Your personal contribution** — what you specifically owned, not what the team did
-> - **Scale or operational complexity** — users, traffic, concurrency, data volume, latency, reliability, cost, or deployment/on-call responsibility. Approximate figures are fine.
-> - **One difficult engineering or product decision** you made, and the trade-off you accepted
-> - **A public link** — repo, case study, or product page — if one exists
->
-> Confidential details may be anonymised. The scorecard rates this separately from the code and rewards *specificity and coherent reasoning* over famous names or large numbers.
+**A payroll platform with statutory real-time reporting** — used by employers and bookkeeping
+agents to run payroll and lodge every pay event with the national tax authority. It is a
+compliance system wearing a CRUD system's clothes: the screens look like ordinary payroll, but
+every figure on them is a statutory declaration, and the regulator accepts a well-formed lie
+without complaint, then acts on it months later against an employee's tax position.
+
+That was the defect I was brought in to fix. The reporting layer substituted plausible
+defaults for missing values `"N/A"` for a legal name, a filler postcode — so a submission the
+regulator would have *rejected* became one it accepted and acted on. Separately, year-to-date
+figures, which the regulator uses to decide which submission supersedes which, were maintained
+by two independent accumulators that had drifted apart.
+
+**What I owned.** The year-to-date subsystem. It had two roughly 200-line accumulators, one
+for creating a pay run, one for editing it, that had to be kept in step by hand and were not:
+a leave cash-out had been added to one and missed in the other, so any edited pay run
+misreported it. I replaced both with a single pure accumulator folded over a payee's pay runs
+in payment-date order, stored the result as a JSONB snapshot on the pay run itself, and dropped
+the two tables and three foreign keys it replaced. I also built the conformance test harness,
+the submission validator that refuses to lodge rather than substitute a value, and the
+year-scoped tax and allowance rate tables.
+
+**Scale and operational reality.** The binding constraint on this system is correctness rather
+than load, so the figures worth quoting are about verification: 1,667 tests, of which the
+load-bearing ones reproduce **9 of the regulator's published conformance cases byte-for-byte**
+against 26 fixture documents, plus 692 rows of the authority's own withholding samples checked
+against our calculator. The withholding coefficients are around 750 lines of statutory rate
+data, versioned per financial year, recalculating an old pay run at current rates silently
+corrupts history. Structurally: 35 tables, 137 migrations, 48 service objects, and roughly 170
+backend and 188 frontend source files. Multi-tenant by design, where one bookkeeping agent
+holds many employers each with its own regulator-facing identity, so tenancy is a reporting
+correctness concern and not just data partitioning.
+
+**The hard decision.** The old and new accumulators disagreed, and I had no trustworthy oracle
+,the existing figures were themselves suspect. The only ground truth was the regulator's
+published conformance fixtures. So I ported the leave-balance calculation **verbatim, including
+logic I knew was wrong**: it derives its financial year from the pay period start while
+everything else uses the payment date. Changing figures mid-rewrite would have destroyed the
+fixtures as a check, because any difference could then have been the fix or the bug. That
+bought a provable migration — 43 of 44 existing records matched field-for-field, and the one
+that did not turned out to be stale stored data rather than a calculation difference — at the
+cost of knowingly shipping a defect I would have to come back for. I would do it the same way.
+The alternative was a rewrite nobody could verify.
+
+I also shipped a bug in that work. Soft-deleted pay runs kept counting toward year-to-date,
+because the model carries a `default_scope` that re-includes deleted rows and my fold inherited
+it silently. A reviewer caught it. The fix was six query sites plus a regression test that
+fails if anyone removes that scope — the test matters more than the fix, because the trap is
+invisible at every call site.
+
+**Evidence.** Private commercial codebase. Happy to walk through the year-to-date accumulator,
+the conformance harness, or the validator in a call.
